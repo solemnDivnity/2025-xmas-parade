@@ -598,6 +598,7 @@ void setup() {
 void loop() {
   updateFaceAnimation();
   updateHatTippingAnimation();
+  updatePlatformRotation();
 }
 
 void resetLEDMatrix() {
@@ -663,11 +664,12 @@ void updateFaceAnimation() {
 enum states { TIPPING_HAT,
               PUTTING_HAT_BACK_ON,
               HOLDING,
-              SPINNING};
-int currentAnimationState = HOLDING;
-int previousAnimationState = HOLDING;
+              COMPLETE};
+int currentAnimationState = COMPLETE;
+int previousAnimationState = COMPLETE;
 unsigned long hatTip_previousTime = millis();
 bool isFacingLeft = true;
+bool isSpinning = false;
 
 void updateHatTippingAnimation() {
 
@@ -681,51 +683,37 @@ void updateHatTippingAnimation() {
   unsigned long hatTip_currentTime = millis();
 
   switch (currentAnimationState) {
-    case PUTTING_HAT_BACK_ON:
-      if (!isShoulderLimitSwitchHit()) {
-        raiseArm();
-      } else {
-        stopShoulderRotation();
-      }
-      break;
     case TIPPING_HAT:
+    //tip hat down
       lowerArm();
-      if (hatTip_currentTime - hatTip_previousTime >= 1000) {
+      if (hasTimeElapsed(hatTip_previousTime, hatTip_currentTime, 1000)) {
         hatTip_previousTime = hatTip_currentTime;
-        stopShoulderRotation();
+        stopArm();
+        currentAnimationState = HOLDING;
       }
       break;
     case HOLDING:
-      if (previousAnimationState == TIPPING_HAT) {
-        currentAnimationState = PUTTING_HAT_BACK_ON;
-      } else if(previousAnimationState == SPINNING) {
-        currentAnimationState = TIPPING_HAT;
-      } else if(previousAnimationState == PUTTING_HAT_BACK_ON){
-        currentAnimationState = SPINNING;
-      }
-      if (hatTip_currentTime - hatTip_previousTime >= 1000) {
+    //hold for 2 seconds
+      if (hasTimeElapsed(hatTip_previousTime, hatTip_currentTime, 2000)) {
         hatTip_previousTime = hatTip_currentTime;
-        stopShoulderRotation();
+        currentAnimationState = PUTTING_HAT_BACK_ON;
       }
       break;
-      case SPINNING:
-      if (isFacingLeft) {
-        //spin to the right till you hit the limit switch
-        if(digitalRead(PLATFORM_LEFT_LIMIT) == LOW) {
-          stopPlatformMotor();
-        } else {
-          turnRight();
-        }
+    case PUTTING_HAT_BACK_ON:
+      // raise arm till it hits the limit switch then hold for 1 second then complete animation to spin
+      if (!isShoulderLimitSwitchHit()) {
+        raiseArm();
       } else {
-        //spin to the right till you hit the limit switch
-        if(digitalRead(PLATFORM_RIGHT_LIMIT) == LOW) {
-          stopPlatformMotor();
-        } else {
-          turnRight();
+        stopArm();
+        if (hasTimeElapsed(hatTip_previousTime, hatTip_currentTime, 1000)) {
+          hatTip_previousTime = hatTip_currentTime;
+          currentAnimationState = COMPLETE;
+          isSpinning = true;
         }
       }
-      currentAnimationState = HOLDING;
       break;
+    case COMPLETE:
+    break;
   }
 }
 
@@ -741,25 +729,53 @@ void lowerArm() {
   shoulderSparkMax.writeMicroseconds(1400);  // Initialize to neutral/stop
 }
 
-void stopShoulderRotation() {
-  previousAnimationState = currentAnimationState;
-  currentAnimationState = HOLDING;
+void stopArm() {
   shoulderSparkMax.writeMicroseconds(1500);  // Initialize to neutral/stop
-  Serial.print("PreviousState: ");
-  Serial.print(previousAnimationState);
-  Serial.println(" ");
 }
 
-void turnleft() {
-  platformSparkMax.writeMicroseconds(1800);  // Initialize to neutral/stop
+void updatePlatformRotation() {
+  if(isSpinning) {
+      if (!isFacingLeft) {
+        turnLeft();      
+        } else {
+        turnRight();
+      }
+  } else {
+    //If we are not spinning and we are not at the limit switch then spin
+    if(digitalRead(PLATFORM_RIGHT_LIMIT) != LOW) && digitalRead(PLATFORM_LEFT_LIMIT) != LOW) {
+      isSpinning = true;
+    }
+  }
+}
+
+void turnLeft() {
+  if(digitalRead(PLATFORM_LEFT_LIMIT) == LOW) {
+      stopPlatformMotor();
+      isSpinning = false;
+      isFacingLeft = false;
+  } else {
+    platformSparkMax.writeMicroseconds(1800);  // Initialize to neutral/stop
+  }
 }
 
 void turnRight() {
+          //spin to the left till you hit the limit switch
+        if(digitalRead(PLATFORM_RIGHT_LIMIT) == LOW) {
+          stopPlatformMotor();
+          isSpinning = false;
+          isFacingLeft = false;
+        } else {
   platformSparkMax.writeMicroseconds(1800);  // Initialize to neutral/stop
-}
+        }
+
+      }
 
 void stopPlatformMotor() {
   platformSparkMax.writeMicroseconds(1500);  // Initialize to neutral/stop
+}
+
+bool hasTimeElapsed(unsigned long previousTime, unsigned long currentTime, unsigned long interval) {
+  return currentTime - previousTime >= interval;
 }
 
 
