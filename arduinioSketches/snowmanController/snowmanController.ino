@@ -582,6 +582,22 @@ unsigned long faceAnimation_previousTime = millis();
 int currentFaceAnimationFrame = 0;
 int nextFaceAnimationInterval = 500;
 
+
+enum states { TIPPING_HAT,
+              PUTTING_HAT_BACK_ON,
+              HOLDING,
+              COMPLETE };
+const char* stateNames[] = {"TIPPING_HAT", "PUTTING_HAT_BACK_ON", "HOLDING","COMPLETE"};
+
+int currentAnimationState = COMPLETE;
+int previousAnimationState = COMPLETE;
+unsigned long hatTip_previousTime = millis();
+bool isFacingLeft = true;
+bool isSpinning = false;
+bool hasHitShouldLimitSwitch = false;
+unsigned long shoulderBounceTimerPrevious = millis();
+
+
 void setup() {
   // put your setup code here, to run once:
   Serial.begin(9600);
@@ -599,6 +615,26 @@ void loop() {
   updateFaceAnimation();
   updateHatTippingAnimation();
   updatePlatformRotation();
+  Serial.print("Animationo State: ");
+  Serial.print(stateNames[currentAnimationState]);
+  Serial.print(" ");
+  Serial.print("isShoulderLimitSwitchHit: ");
+  Serial.print(isShoulderLimitSwitchHit());
+  Serial.print(" limitSwitchValue: ");
+  Serial.print(digitalRead(SHOULDER_LIMIT_PIN));
+  Serial.print(" isSpinning: ");
+  Serial.print(isSpinning);
+  Serial.print(" LEFT LIMIT SWITCH: ");
+  Serial.print(digitalRead(PLATFORM_LEFT_LIMIT));
+  Serial.print(" RIGHT LIMIT SWITCH: ");
+  Serial.print(digitalRead(PLATFORM_RIGHT_LIMIT));
+  Serial.print(" LEFT LIMIT SWITCH: ");
+  Serial.print(didHitLeftLimitSwitch());
+  Serial.print(" RIGHT LIMIT SWITCH: ");
+  Serial.print(didHitRightLimitSwitch());
+  Serial.println(" ");
+
+
 }
 
 void resetLEDMatrix() {
@@ -661,39 +697,29 @@ void updateFaceAnimation() {
   }
 }
 
-enum states { TIPPING_HAT,
-              PUTTING_HAT_BACK_ON,
-              HOLDING,
-              COMPLETE};
-int currentAnimationState = COMPLETE;
-int previousAnimationState = COMPLETE;
-unsigned long hatTip_previousTime = millis();
-bool isFacingLeft = true;
-bool isSpinning = false;
-
 void updateHatTippingAnimation() {
-
+/*
   Serial.print("Platform left limit state: ");
   Serial.print(digitalRead(PLATFORM_LEFT_LIMIT));
   Serial.print(" Platform Right limit state: ");
   Serial.print(digitalRead(PLATFORM_RIGHT_LIMIT));
   Serial.println(" ");
-
+*/
 
   unsigned long hatTip_currentTime = millis();
 
   switch (currentAnimationState) {
     case TIPPING_HAT:
-    //tip hat down
+      //tip hat down
       lowerArm();
-      if (hasTimeElapsed(hatTip_previousTime, hatTip_currentTime, 1000)) {
+      if (hasTimeElapsed(hatTip_previousTime, hatTip_currentTime, 750)) {
         hatTip_previousTime = hatTip_currentTime;
         stopArm();
         currentAnimationState = HOLDING;
       }
       break;
     case HOLDING:
-    //hold for 2 seconds
+      //hold for 2 seconds
       if (hasTimeElapsed(hatTip_previousTime, hatTip_currentTime, 2000)) {
         hatTip_previousTime = hatTip_currentTime;
         currentAnimationState = PUTTING_HAT_BACK_ON;
@@ -704,25 +730,45 @@ void updateHatTippingAnimation() {
       if (!isShoulderLimitSwitchHit()) {
         raiseArm();
       } else {
-        stopArm();
-        if (hasTimeElapsed(hatTip_previousTime, hatTip_currentTime, 1000)) {
-          hatTip_previousTime = hatTip_currentTime;
-          currentAnimationState = COMPLETE;
-          isSpinning = true;
-        }
+          stopArm();
+          if (hasTimeElapsed(hatTip_previousTime, hatTip_currentTime, 3000)) {
+            hatTip_previousTime = hatTip_currentTime;
+            currentAnimationState = COMPLETE;
+            isSpinning = true;
+          }
       }
       break;
     case COMPLETE:
-    break;
+      stopArm();
+      if(!isSpinning){
+        currentAnimationState = TIPPING_HAT;
+      }
+      break;
   }
 }
 
 bool isShoulderLimitSwitchHit() {
-  return digitalRead(SHOULDER_LIMIT_PIN) == LOW;
+  unsigned long shoulderBounceTimerCurrent = millis();
+
+  if(digitalRead(SHOULDER_LIMIT_PIN) == 0){
+    hasHitShouldLimitSwitch = true;
+    shoulderBounceTimerPrevious = shoulderBounceTimerCurrent;
+  }
+
+  if(!hasTimeElapsed(shoulderBounceTimerPrevious,shoulderBounceTimerCurrent,1000)) {
+  } else if(hasTimeElapsed(shoulderBounceTimerPrevious,shoulderBounceTimerCurrent,1000) && hasHitShouldLimitSwitch) {
+        shoulderBounceTimerPrevious = shoulderBounceTimerCurrent;
+    hasHitShouldLimitSwitch = digitalRead(SHOULDER_LIMIT_PIN) == 0;
+  }
+  else {
+    hasHitShouldLimitSwitch = digitalRead(SHOULDER_LIMIT_PIN) == 0;
+  }
+
+  return hasHitShouldLimitSwitch;
 }
 
 void raiseArm() {
-  shoulderSparkMax.writeMicroseconds(1800);  // Initialize to neutral/stop
+  shoulderSparkMax.writeMicroseconds(1750);  // Initialize to neutral/stop
 }
 
 void lowerArm() {
@@ -734,41 +780,42 @@ void stopArm() {
 }
 
 void updatePlatformRotation() {
-  if(isSpinning) {
-      if (!isFacingLeft) {
-        turnLeft();      
-        } else {
-        turnRight();
-      }
+  if (isSpinning) {
+    if (!isFacingLeft) {
+      turnLeft();
+    } else {
+      turnRight();
+    }
   } else {
     //If we are not spinning and we are not at the limit switch then spin
-    if(digitalRead(PLATFORM_RIGHT_LIMIT) != LOW) && digitalRead(PLATFORM_LEFT_LIMIT) != LOW) {
-      isSpinning = true;
+    if (!didHitLeftLimitSwitch() && !didHitRightLimitSwitch()) {
+        isSpinning = true;
     }
   }
 }
 
 void turnLeft() {
-  if(digitalRead(PLATFORM_LEFT_LIMIT) == LOW) {
-      stopPlatformMotor();
-      isSpinning = false;
-      isFacingLeft = false;
-  } else {
+  if (didHitLeftLimitSwitch()) {
+    Serial.println("hit left limit switch");
+    stopPlatformMotor();
+    isSpinning = false;
+    isFacingLeft = true;
+  } else if(isSpinning) {
     platformSparkMax.writeMicroseconds(1800);  // Initialize to neutral/stop
   }
 }
 
 void turnRight() {
-          //spin to the left till you hit the limit switch
-        if(digitalRead(PLATFORM_RIGHT_LIMIT) == LOW) {
-          stopPlatformMotor();
-          isSpinning = false;
-          isFacingLeft = false;
-        } else {
-  platformSparkMax.writeMicroseconds(1800);  // Initialize to neutral/stop
-        }
-
-      }
+  //spin to the left till you hit the limit switch
+  if (didHitRightLimitSwitch()) {
+    Serial.println("hit right limit switch");
+    stopPlatformMotor();
+    isSpinning = false;
+    isFacingLeft = false;
+  } else if(isSpinning) {
+    platformSparkMax.writeMicroseconds(1200);  // Initialize to neutral/stop
+  }
+}
 
 void stopPlatformMotor() {
   platformSparkMax.writeMicroseconds(1500);  // Initialize to neutral/stop
@@ -778,4 +825,46 @@ bool hasTimeElapsed(unsigned long previousTime, unsigned long currentTime, unsig
   return currentTime - previousTime >= interval;
 }
 
+unsigned long platformBounceTimerPrevious;
+bool hitLeftLimitSwitch = false;
+bool didHitLeftLimitSwitch() {
+  unsigned long platformBounceTimerCurrent = millis();
+
+  if(digitalRead(PLATFORM_LEFT_LIMIT) == 0){
+    hitLeftLimitSwitch = true;
+    platformBounceTimerPrevious = platformBounceTimerCurrent;
+  }
+
+  if(!hasTimeElapsed(platformBounceTimerPrevious,platformBounceTimerCurrent,5000)) {
+  } else if(hasTimeElapsed(platformBounceTimerPrevious,platformBounceTimerCurrent,5000) && hitLeftLimitSwitch) {
+        platformBounceTimerPrevious = platformBounceTimerCurrent;
+    hitLeftLimitSwitch = digitalRead(PLATFORM_LEFT_LIMIT) == 0;
+  }
+  else {
+    hitLeftLimitSwitch = digitalRead(PLATFORM_LEFT_LIMIT) == 0;
+  }
+
+  return hitLeftLimitSwitch;
+}
+
+bool hitRightLimitSwitch = false;
+bool didHitRightLimitSwitch() {
+  unsigned long platformBounceTimerCurrent = millis();
+
+  if(digitalRead(PLATFORM_RIGHT_LIMIT) == 0){
+    hitRightLimitSwitch = true;
+    platformBounceTimerPrevious = platformBounceTimerCurrent;
+  }
+
+  if(!hasTimeElapsed(platformBounceTimerPrevious,platformBounceTimerCurrent,5000)) {
+  } else if(hasTimeElapsed(platformBounceTimerPrevious,platformBounceTimerCurrent,5000) && hitRightLimitSwitch) {
+        platformBounceTimerPrevious = platformBounceTimerCurrent;
+    hitRightLimitSwitch = digitalRead(PLATFORM_RIGHT_LIMIT) == 0;
+  }
+  else {
+    hitRightLimitSwitch = digitalRead(PLATFORM_RIGHT_LIMIT) == 0;
+  }
+
+  return hitRightLimitSwitch;
+}
 
